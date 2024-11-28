@@ -160,13 +160,15 @@ public:
     }
     catch (const pluginlib::PluginlibException & ex)
     {
-      RCLCPP_ERROR(get_logger(), "Exception while loading hardware: %s", ex.what());
+      RCLCPP_ERROR(
+        get_logger(), "Caught exception of type : %s while loading hardware: %s", typeid(ex).name(),
+        ex.what());
     }
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
-        get_logger(), "Exception occurred while loading hardware '%s': %s",
-        hardware_info.name.c_str(), ex.what());
+        get_logger(), "Exception of type : %s occurred while loading hardware '%s': %s",
+        typeid(ex).name(), hardware_info.name.c_str(), ex.what());
     }
     catch (...)
     {
@@ -203,8 +205,8 @@ public:
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
-        get_logger(), "Exception occurred while initializing hardware '%s': %s",
-        hardware_info.name.c_str(), ex.what());
+        get_logger(), "Exception of type : %s occurred while initializing hardware '%s': %s",
+        typeid(ex).name(), hardware_info.name.c_str(), ex.what());
     }
     catch (...)
     {
@@ -229,8 +231,8 @@ public:
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
-        get_logger(), "Exception occurred while configuring hardware '%s': %s",
-        hardware.get_name().c_str(), ex.what());
+        get_logger(), "Exception of type : %s occurred while configuring hardware '%s': %s",
+        typeid(ex).name(), hardware.get_name().c_str(), ex.what());
     }
     catch (...)
     {
@@ -378,8 +380,8 @@ public:
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
-        get_logger(), "Exception occurred while cleaning up hardware '%s': %s",
-        hardware.get_name().c_str(), ex.what());
+        get_logger(), "Exception of type : %s occurred while cleaning up hardware '%s': %s",
+        typeid(ex).name(), hardware.get_name().c_str(), ex.what());
     }
     catch (...)
     {
@@ -412,8 +414,8 @@ public:
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
-        get_logger(), "Exception occurred while shutting down hardware '%s': %s",
-        hardware.get_name().c_str(), ex.what());
+        get_logger(), "Exception of type : %s occurred while shutting down hardware '%s': %s",
+        typeid(ex).name(), hardware.get_name().c_str(), ex.what());
     }
     catch (...)
     {
@@ -451,8 +453,8 @@ public:
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
-        get_logger(), "Exception occurred while activating hardware '%s': %s",
-        hardware.get_name().c_str(), ex.what());
+        get_logger(), "Exception of type : %s occurred while activating hardware '%s': %s",
+        typeid(ex).name(), hardware.get_name().c_str(), ex.what());
     }
     catch (...)
     {
@@ -486,8 +488,8 @@ public:
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
-        get_logger(), "Exception occurred while deactivating hardware '%s': %s",
-        hardware.get_name().c_str(), ex.what());
+        get_logger(), "Exception of type : %s occurred while deactivating hardware '%s': %s",
+        typeid(ex).name(), hardware.get_name().c_str(), ex.what());
     }
     catch (...)
     {
@@ -514,7 +516,7 @@ public:
     switch (target_state.id())
     {
       case State::PRIMARY_STATE_UNCONFIGURED:
-        switch (hardware.get_state().id())
+        switch (hardware.get_lifecycle_state().id())
         {
           case State::PRIMARY_STATE_UNCONFIGURED:
             result = true;
@@ -538,7 +540,7 @@ public:
         }
         break;
       case State::PRIMARY_STATE_INACTIVE:
-        switch (hardware.get_state().id())
+        switch (hardware.get_lifecycle_state().id())
         {
           case State::PRIMARY_STATE_UNCONFIGURED:
             result = configure_hardware(hardware);
@@ -558,7 +560,7 @@ public:
         }
         break;
       case State::PRIMARY_STATE_ACTIVE:
-        switch (hardware.get_state().id())
+        switch (hardware.get_lifecycle_state().id())
         {
           case State::PRIMARY_STATE_UNCONFIGURED:
             result = configure_hardware(hardware);
@@ -582,7 +584,7 @@ public:
         }
         break;
       case State::PRIMARY_STATE_FINALIZED:
-        switch (hardware.get_state().id())
+        switch (hardware.get_lifecycle_state().id())
         {
           case State::PRIMARY_STATE_UNCONFIGURED:
             result = shutdown_hardware(hardware);
@@ -606,36 +608,48 @@ public:
   template <class HardwareT>
   void import_state_interfaces(HardwareT & hardware)
   {
-    try
+    auto interfaces = hardware.export_state_interfaces();
+    const auto interface_names = add_state_interfaces(interfaces);
+
+    RCLCPP_WARN(
+      get_logger(),
+      "Importing state interfaces for the hardware '%s' returned no state interfaces.",
+      hardware.get_name().c_str());
+
+    hardware_info_map_[hardware.get_name()].state_interfaces = interface_names;
+    available_state_interfaces_.reserve(
+      available_state_interfaces_.capacity() + interface_names.size());
+  }
+
+  void insert_command_interface(const CommandInterface::SharedPtr command_interface)
+  {
+    const auto [it, success] = command_interface_map_.insert(
+      std::make_pair(command_interface->get_name(), command_interface));
+    if (!success)
     {
-      auto interfaces = hardware.export_state_interfaces();
-      std::vector<std::string> interface_names;
-      interface_names.reserve(interfaces.size());
-      for (auto & interface : interfaces)
-      {
-        auto key = interface.get_name();
-        state_interface_map_.emplace(std::make_pair(key, std::move(interface)));
-        interface_names.push_back(key);
-      }
-      hardware_info_map_[hardware.get_name()].state_interfaces = interface_names;
-      available_state_interfaces_.reserve(
-        available_state_interfaces_.capacity() + interface_names.size());
-    }
-    catch (const std::exception & e)
-    {
-      RCLCPP_ERROR(
-        get_logger(),
-        "Exception occurred while importing state interfaces for the hardware '%s' : %s",
-        hardware.get_name().c_str(), e.what());
-    }
-    catch (...)
-    {
-      RCLCPP_ERROR(
-        get_logger(),
-        "Unknown exception occurred while importing state interfaces for the hardware '%s'",
-        hardware.get_name().c_str());
+      std::string msg(
+        "ResourceStorage: Tried to insert CommandInterface with already existing key. Insert[" +
+        command_interface->get_name() + "]");
+      throw std::runtime_error(msg);
     }
   }
+
+  // BEGIN (Handle export change): for backward compatibility, can be removed if
+  // export_command_interfaces() method is removed
+  void insert_command_interface(CommandInterface && command_interface)
+  {
+    std::string key = command_interface.get_name();
+    const auto [it, success] = command_interface_map_.emplace(
+      std::make_pair(key, std::make_shared<CommandInterface>(std::move(command_interface))));
+    if (!success)
+    {
+      std::string msg(
+        "ResourceStorage: Tried to insert CommandInterface with already existing key. Insert[" +
+        key + "]");
+      throw std::runtime_error(msg);
+    }
+  }
+  // END: for backward compatibility
 
   template <class HardwareT>
   void import_command_interfaces(HardwareT & hardware)
@@ -645,13 +659,15 @@ public:
       auto interfaces = hardware.export_command_interfaces();
       hardware_info_map_[hardware.get_name()].command_interfaces =
         add_command_interfaces(interfaces);
+      // TODO(Manuel) END: for backward compatibility
     }
     catch (const std::exception & ex)
     {
       RCLCPP_ERROR(
         get_logger(),
-        "Exception occurred while importing command interfaces for the hardware '%s' : %s",
-        hardware.get_name().c_str(), ex.what());
+        "Exception of type : %s occurred while importing command interfaces for the hardware '%s' "
+        ": %s",
+        typeid(ex).name(), hardware.get_name().c_str(), ex.what());
     }
     catch (...)
     {
@@ -662,6 +678,19 @@ public:
     }
   }
 
+  std::string add_state_interface(StateInterface::ConstSharedPtr interface)
+  {
+    auto interface_name = interface->get_name();
+    const auto [it, success] = state_interface_map_.emplace(interface_name, interface);
+    if (!success)
+    {
+      std::string msg(
+        "ResourceStorage: Tried to insert StateInterface with already existing key. Insert[" +
+        interface->get_name() + "]");
+      throw std::runtime_error(msg);
+    }
+    return interface_name;
+  }
   /// Adds exported state interfaces into internal storage.
   /**
    * Adds state interfaces to the internal storage. State interfaces exported from hardware or
@@ -673,15 +702,23 @@ public:
    * \returns list of interface names that are added into internal storage. The output is used to
    * avoid additional iterations to cache interface names, e.g., for initializing info structures.
    */
-  std::vector<std::string> add_state_interfaces(std::vector<StateInterface> & interfaces)
+  std::vector<std::string> add_state_interfaces(
+    std::vector<StateInterface::ConstSharedPtr> & interfaces)
   {
     std::vector<std::string> interface_names;
     interface_names.reserve(interfaces.size());
     for (auto & interface : interfaces)
     {
-      auto key = interface.get_name();
-      state_interface_map_.emplace(std::make_pair(key, std::move(interface)));
-      interface_names.push_back(key);
+      try
+      {
+        interface_names.push_back(add_state_interface(interface));
+      }
+      // We don't want to crash during runtime because a StateInterface could not be added
+      catch (const std::exception & e)
+      {
+        RCLCPP_WARN(
+          get_logger(), "Exception occurred while importing state interfaces: %s", e.what());
+      }
     }
     available_state_interfaces_.reserve(
       available_state_interfaces_.capacity() + interface_names.size());
@@ -721,7 +758,25 @@ public:
     for (auto & interface : interfaces)
     {
       auto key = interface.get_name();
-      command_interface_map_.emplace(std::make_pair(key, std::move(interface)));
+      insert_command_interface(std::move(interface));
+      claimed_command_interface_map_.emplace(std::make_pair(key, false));
+      interface_names.push_back(key);
+    }
+    available_command_interfaces_.reserve(
+      available_command_interfaces_.capacity() + interface_names.size());
+
+    return interface_names;
+  }
+
+  std::vector<std::string> add_command_interfaces(
+    const std::vector<CommandInterface::SharedPtr> & interfaces)
+  {
+    std::vector<std::string> interface_names;
+    interface_names.reserve(interfaces.size());
+    for (const auto & interface : interfaces)
+    {
+      auto key = interface->get_name();
+      insert_command_interface(interface);
       claimed_command_interface_map_.emplace(std::make_pair(key, false));
       interface_names.push_back(key);
     }
@@ -1014,9 +1069,9 @@ public:
   std::unordered_map<std::string, std::vector<std::string>> controllers_reference_interfaces_map_;
 
   /// Storage of all available state interfaces
-  std::map<std::string, StateInterface> state_interface_map_;
+  std::map<std::string, StateInterface::ConstSharedPtr> state_interface_map_;
   /// Storage of all available command interfaces
-  std::map<std::string, CommandInterface> command_interface_map_;
+  std::map<std::string, CommandInterface::SharedPtr> command_interface_map_;
 
   /// Vectors with interfaces available to controllers (depending on hardware component state)
   std::vector<std::string> available_state_interfaces_;
@@ -1187,7 +1242,7 @@ bool ResourceManager::state_interface_is_available(const std::string & name) con
 
 // CM API: Called in "callback/slow"-thread
 void ResourceManager::import_controller_exported_state_interfaces(
-  const std::string & controller_name, std::vector<StateInterface> & interfaces)
+  const std::string & controller_name, std::vector<StateInterface::ConstSharedPtr> & interfaces)
 {
   std::lock_guard<std::recursive_mutex> guard(resource_interfaces_lock_);
   auto interface_names = resource_storage_->add_state_interfaces(interfaces);
@@ -1249,7 +1304,8 @@ void ResourceManager::remove_controller_exported_state_interfaces(
 
 // CM API: Called in "callback/slow"-thread
 void ResourceManager::import_controller_reference_interfaces(
-  const std::string & controller_name, std::vector<CommandInterface> & interfaces)
+  const std::string & controller_name,
+  const std::vector<hardware_interface::CommandInterface::SharedPtr> & interfaces)
 {
   std::scoped_lock guard(resource_interfaces_lock_, claimed_command_interfaces_lock_);
   auto interface_names = resource_storage_->add_command_interfaces(interfaces);
@@ -1462,7 +1518,8 @@ std::unordered_map<std::string, HardwareComponentInfo> ResourceManager::get_comp
   {
     for (auto & component : container)
     {
-      resource_storage_->hardware_info_map_[component.get_name()].state = component.get_state();
+      resource_storage_->hardware_info_map_[component.get_name()].state =
+        component.get_lifecycle_state();
     }
   };
 
@@ -1546,8 +1603,9 @@ bool ResourceManager::prepare_command_mode_switch(
     for (auto & component : components)
     {
       if (
-        component.get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
-        component.get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
+        component.get_lifecycle_state().id() ==
+          lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
+        component.get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
       {
         try
         {
@@ -1566,9 +1624,9 @@ bool ResourceManager::prepare_command_mode_switch(
         {
           RCLCPP_ERROR(
             logger,
-            "Exception occurred while preparing command mode switch for component '%s' for the "
-            "interfaces: \n %s : %s",
-            component.get_name().c_str(),
+            "Exception of type : %s occurred while preparing command mode switch for component "
+            "'%s' for the interfaces: \n %s : %s",
+            typeid(e).name(), component.get_name().c_str(),
             interfaces_to_string(start_interfaces, stop_interfaces).c_str(), e.what());
           ret = false;
         }
@@ -1611,8 +1669,9 @@ bool ResourceManager::perform_command_mode_switch(
     for (auto & component : components)
     {
       if (
-        component.get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
-        component.get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
+        component.get_lifecycle_state().id() ==
+          lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
+        component.get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
       {
         try
         {
@@ -1629,9 +1688,9 @@ bool ResourceManager::perform_command_mode_switch(
         {
           RCLCPP_ERROR(
             logger,
-            "Exception occurred while performing command mode switch for component '%s' for the "
-            "interfaces: \n %s : %s",
-            component.get_name().c_str(),
+            "Exception of type : %s occurred while performing command mode switch for component "
+            "'%s' for the interfaces: \n %s : %s",
+            typeid(e).name(), component.get_name().c_str(),
             interfaces_to_string(start_interfaces, stop_interfaces).c_str(), e.what());
           ret = false;
         }
@@ -1788,8 +1847,8 @@ HardwareReadWriteStatus ResourceManager::read(
       catch (const std::exception & e)
       {
         RCLCPP_ERROR(
-          get_logger(), "Exception thrown durind read of the component '%s': %s",
-          component.get_name().c_str(), e.what());
+          get_logger(), "Exception of type : %s thrown during read of the component '%s': %s",
+          typeid(e).name(), component.get_name().c_str(), e.what());
         ret_val = return_type::ERROR;
       }
       catch (...)
@@ -1801,6 +1860,7 @@ HardwareReadWriteStatus ResourceManager::read(
       }
       if (ret_val == return_type::ERROR)
       {
+        component.error();
         read_write_status.ok = false;
         read_write_status.failed_hardware_names.push_back(component.get_name());
         resource_storage_->remove_all_hardware_interfaces_from_available_list(component.get_name());
@@ -1848,8 +1908,8 @@ HardwareReadWriteStatus ResourceManager::write(
       catch (const std::exception & e)
       {
         RCLCPP_ERROR(
-          get_logger(), "Exception thrown during write of the component '%s': %s",
-          component.get_name().c_str(), e.what());
+          get_logger(), "Exception of type : %s thrown during write of the component '%s': %s",
+          typeid(e).name(), component.get_name().c_str(), e.what());
         ret_val = return_type::ERROR;
       }
       catch (...)
@@ -1861,6 +1921,7 @@ HardwareReadWriteStatus ResourceManager::write(
       }
       if (ret_val == return_type::ERROR)
       {
+        component.error();
         read_write_status.ok = false;
         read_write_status.failed_hardware_names.push_back(component.get_name());
         resource_storage_->remove_all_hardware_interfaces_from_available_list(component.get_name());

@@ -71,10 +71,10 @@ public:
   const rclcpp_lifecycle::State & error();
 
   HARDWARE_INTERFACE_PUBLIC
-  std::vector<StateInterface> export_state_interfaces();
+  std::vector<StateInterface::ConstSharedPtr> export_state_interfaces();
 
   HARDWARE_INTERFACE_PUBLIC
-  std::vector<CommandInterface> export_command_interfaces();
+  std::vector<CommandInterface::SharedPtr> export_command_interfaces();
 
   HARDWARE_INTERFACE_PUBLIC
   return_type prepare_command_mode_switch(
@@ -93,7 +93,7 @@ public:
   std::string get_group_name() const;
 
   HARDWARE_INTERFACE_PUBLIC
-  const rclcpp_lifecycle::State & get_state() const;
+  const rclcpp_lifecycle::State & get_lifecycle_state() const;
 
   HARDWARE_INTERFACE_PUBLIC
   return_type read(const rclcpp::Time & time, const rclcpp::Duration & period);
